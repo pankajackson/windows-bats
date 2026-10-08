@@ -1,61 +1,59 @@
 @echo off
+setlocal EnableExtensions
+title Enable WinRM PowerShell Remoting
 
-:: Check administrator privileges
+echo.
+echo ==============================================
+echo       ENABLE WINRM / POWERSHELL REMOTING
+echo ==============================================
+echo.
+
 net session >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [ERROR] This script must be run as Administrator.
-    echo.
+if errorlevel 1 (
+    echo [ERROR] Run this script from an Administrator command prompt.
     pause
     exit /b 1
 )
 
-:: Change the active network to Private
-powershell -NoProfile -Command "Get-NetConnectionProfile | Where-Object {$_.IPv4Connectivity -ne 'Disconnected'} | Set-NetConnectionProfile -NetworkCategory Private"
+echo This configures the WinRM HTTP listener on TCP 5985.
+echo Connected Public network profiles will be changed to Private so WinRM can add its firewall exception.
+echo Use only on a trusted network; the firewall rule will be limited to the local subnet.
+echo.
 
-:: Enable WinRM / PowerShell Remoting
-powershell -NoProfile -Command "Enable-PSRemoting -Force"
+echo Changing connected network profiles to Private...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $profiles=Get-NetConnectionProfile | Where-Object {($_.IPv4Connectivity -ne 'Disconnected' -or $_.IPv6Connectivity -ne 'Disconnected') -and $_.NetworkCategory -eq 'Public'}; if ($profiles) { $profiles | Set-NetConnectionProfile -NetworkCategory Private; Write-Output 'Connected Public profiles changed to Private.' } else { Write-Output 'No connected Public profiles needed changing.' }"
+if errorlevel 1 (
+    echo.
+    echo [ERROR] Could not change connected Public network profiles to Private. WinRM setup was not attempted.
+    pause
+    exit /b 1
+)
 
-:: Verify WinRM
-powershell -NoProfile -Command "Test-WSMan localhost"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; Enable-PSRemoting -Force; $rules=Get-NetFirewallRule -Name 'WINRM-HTTP-In-TCP*' -ErrorAction SilentlyContinue; if (-not $rules) { $rules=Get-NetFirewallRule -DisplayGroup 'Windows Remote Management' -ErrorAction Stop }; $rules | Where-Object Enabled -eq 'True' | Set-NetFirewallRule -RemoteAddress LocalSubnet; Test-WSMan -ComputerName localhost | Out-Null; Write-Output 'WinRM listener verified locally.'"
+if errorlevel 1 (
+    echo.
+    echo [ERROR] WinRM setup or local verification failed.
+    echo On a Public network, Windows may block Enable-PSRemoting. Use a trusted Private or Domain network,
+    echo or configure a narrowly scoped firewall rule through your administrator.
+    pause
+    exit /b 1
+)
 
 echo.
-echo ------------------------------------------
-echo Listening on TCP 5985:
-echo ------------------------------------------
-netstat -ano | findstr ":5985"
-
+echo [OK] WinRM is configured and its enabled inbound rules are scoped to the local subnet.
+echo Firewall policy or Group Policy may override local settings.
 echo.
-echo ------------------------------------------
-echo Network Configuration:
-echo ------------------------------------------
+echo Computer: & hostname
+echo IPv4 addresses:
 ipconfig | findstr /I "IPv4"
-
 echo.
-echo ------------------------------------------
-echo Local WinRM Test:
-echo ------------------------------------------
-powershell.exe -NoProfile -Command "Test-WSMan localhost"
-
+echo WinRM listener:
+powershell.exe -NoProfile -Command "Get-WSManInstance winrm/config/Listener -Enumerate | Select-Object Address,Transport,Port,Enabled | Format-Table -AutoSize"
 echo.
-echo ==========================================
-echo        WinRM CONFIGURATION COMPLETE
-echo ==========================================
+echo Client URL: http://COMPUTER_OR_IP:5985/wsman
+echo For non-domain NTLM clients, specify the Windows account and verify the client's TrustedHosts policy.
+echo Do not expose TCP 5985 to the public internet.
 echo.
-
-echo Computer Name:
-hostname
-
-echo.
-echo Username:
-whoami
-
-echo.
-echo Use this from your Linux/Mac client:
-echo.
-echo   http://YOUR_WINDOWS_IP:5985/wsman
-echo.
-echo Example:
-echo   http://192.168.1.138:5985/wsman
-echo.
-
 pause
+endlocal
+exit /b 0
